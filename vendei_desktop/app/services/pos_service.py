@@ -13,6 +13,7 @@ class TicketLine:
     product_id: int
     name: str
     unit_label: str | None
+    image_url: str | None
     unit_price: float
     quantity: float
 
@@ -37,8 +38,8 @@ class PosService:
     def list_categories(self):
         return self._catalog.list_categories()
 
-    def list_products(self, *, query: str | None = None, category_id: int | None = None):
-        return self._catalog.list_products(query=query, category_id=category_id)
+    def list_products(self, *, query: str | None = None, category_id: int | None = None, only_visible: bool = True):
+        return self._catalog.list_products(query=query, category_id=category_id, only_visible=only_visible)
 
     def quick_add_by_code(self, code: str):
         return self._catalog.get_product_by_code(code)

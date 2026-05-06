@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from .base import Base
@@ -8,6 +9,11 @@ from .models import Category, Customer, InventoryLot, Product
 
 def create_schema(engine) -> None:
     Base.metadata.create_all(engine)
+    # Lightweight migration for early dev: add new columns when DB already exists.
+    with engine.begin() as conn:
+        cols = {c["name"] for c in inspect(conn).get_columns("products")}
+        if "visible" not in cols:
+            conn.execute(text("ALTER TABLE products ADD COLUMN visible BOOLEAN NOT NULL DEFAULT 1"))
 
 
 def seed_if_empty(session: Session) -> None:
@@ -37,7 +43,8 @@ def seed_if_empty(session: Session) -> None:
                 price=9.99,
                 stock=50,
                 category_id=grocery.id if grocery else None,
-                image_url=None,
+                image_url="demo-products/apple.jpg",
+                visible=True,
                 track_expiry=False,
             ),
             Product(
@@ -46,7 +53,8 @@ def seed_if_empty(session: Session) -> None:
                 price=11.49,
                 stock=60,
                 category_id=grocery.id if grocery else None,
-                image_url=None,
+                image_url="demo-products/bananas.jpg",
+                visible=True,
                 track_expiry=False,
             ),
             Product(
@@ -55,7 +63,8 @@ def seed_if_empty(session: Session) -> None:
                 price=14.49,
                 stock=20,
                 category_id=grocery.id if grocery else None,
-                image_url=None,
+                image_url="demo-products/milk.jpg",
+                visible=True,
                 track_expiry=True,
                 default_shelf_life_days=14,
             ),

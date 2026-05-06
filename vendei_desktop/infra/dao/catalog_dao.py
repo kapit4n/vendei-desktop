@@ -21,9 +21,12 @@ class CatalogDao:
         *,
         query: str | None = None,
         category_id: int | None = None,
+        only_visible: bool = True,
         limit: int = 500,
     ) -> list[Product]:
         q = select(Product).order_by(Product.name.asc()).limit(limit)
+        if only_visible:
+            q = q.where(Product.visible.is_(True))
         if category_id is not None:
             q = q.where(Product.category_id == category_id)
         if query:

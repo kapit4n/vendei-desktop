@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -125,6 +126,12 @@ class PosWindow(QMainWindow):
         r.addLayout(top)
 
         self.products = QListWidget()
+        self.products.setViewMode(QListWidget.ViewMode.IconMode)
+        self.products.setIconSize(QSize(96, 96))
+        self.products.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.products.setWrapping(True)
+        self.products.setWordWrap(True)
+        self.products.setSpacing(12)
         r.addWidget(self.products, 1)
 
         self.setCentralWidget(splitter)
@@ -145,19 +152,40 @@ class PosWindow(QMainWindow):
         self._reload_products()
         self._render_ticket()
 
+    def _product_icon(self, image_url: str | None) -> QIcon | None:
+        if not image_url:
+            return None
+        asset_path = Path(__file__).resolve().parent / "assets" / image_url
+        if not asset_path.exists():
+            return None
+        px = QPixmap(str(asset_path))
+        if px.isNull():
+            return None
+        px = px.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        return QIcon(px)
+
     def _reload_products(self) -> None:
         q = self.search.text().strip() or None
-        items = self.vm._svc.list_products(query=q, category_id=None)
+        items = self.vm._svc.list_products(query=q, category_id=None, only_visible=True)
         self.products.clear()
         for p in items:
             it = QListWidgetItem(f"Bs {p.price:.2f}  ·  {p.name}")
+            icon = self._product_icon(getattr(p, "image_url", None))
+            if icon:
+                it.setIcon(icon)
             it.setData(Qt.ItemDataRole.UserRole, p)
             self.products.addItem(it)
 
     def _render_ticket(self) -> None:
         self.ticket.clear()
         for ln in self.vm.state.lines:
-            self.ticket.addItem(f"{ln.quantity:g} × Bs {ln.unit_price:.2f}  ·  {ln.name}  =  Bs {ln.line_total:.2f}")
+            it = QListWidgetItem(
+                f"{ln.quantity:g} × Bs {ln.unit_price:.2f}  ·  {ln.name}  =  Bs {ln.line_total:.2f}"
+            )
+            icon = self._product_icon(getattr(ln, "image_url", None))
+            if icon:
+                it.setIcon(icon)
+            self.ticket.addItem(it)
         self.total.setText(f"Total: Bs {self.vm.state.total:.2f}")
         doc = self.vm.state.customer_doc or "—"
         self.cust_lbl.setText(f"Client: {self.vm.state.customer_name}  ·  ID: {doc}")

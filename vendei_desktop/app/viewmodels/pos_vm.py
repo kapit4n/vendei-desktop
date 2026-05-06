@@ -34,6 +34,7 @@ class PosViewModel:
                     product_id=ln.product_id,
                     name=ln.name,
                     unit_label=ln.unit_label,
+                    image_url=ln.image_url,
                     unit_price=ln.unit_price,
                     quantity=ln.quantity + 1,
                 )
@@ -43,6 +44,7 @@ class PosViewModel:
                 product_id=p.id,
                 name=p.name,
                 unit_label=None,
+                image_url=getattr(p, "image_url", None),
                 unit_price=float(p.price),
                 quantity=1,
             )

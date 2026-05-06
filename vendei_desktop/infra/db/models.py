@@ -24,6 +24,7 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     stock: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
