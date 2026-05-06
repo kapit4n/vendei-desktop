@@ -39,3 +39,7 @@ class CatalogDao:
         with self.session_factory() as s:
             return s.execute(select(Product).where(Product.code == code.strip())).scalars().first()
 
+    def get_product(self, product_id: int) -> Product | None:
+        with self.session_factory() as s:
+            return s.get(Product, product_id)
+

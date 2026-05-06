@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +12,51 @@ from vendei_desktop.infra.db.models import InventoryLot, Product
 @dataclass(frozen=True)
 class StockDao:
     session_factory: sessionmaker
+
+    def list_lots(self, product_id: int) -> list[InventoryLot]:
+        with self.session_factory() as s:
+            return list(
+                s.execute(
+                    select(InventoryLot)
+                    .where(InventoryLot.product_id == product_id)
+                    .order_by(InventoryLot.expiry_date.asc().nullsfirst(), InventoryLot.id.asc())
+                )
+                .scalars()
+                .all()
+            )
+
+    def add_stock(
+        self,
+        *,
+        product_id: int,
+        quantity: float,
+        expiry_date: date | None = None,
+        batch_code: str | None = None,
+    ) -> None:
+        with self.session_factory() as s:
+            p = s.get(Product, product_id)
+            if not p:
+                raise ValueError("Product not found")
+            q = float(quantity)
+            if q <= 0:
+                raise ValueError("Quantity must be > 0")
+
+            batch_clean = (batch_code.strip() or None) if batch_code is not None else None
+            wants_lot = (expiry_date is not None) or (batch_clean is not None)
+            if wants_lot and not bool(p.track_expiry):
+                p.track_expiry = True
+
+            p.stock = float(p.stock or 0.0) + q
+            if bool(p.track_expiry):
+                s.add(
+                    InventoryLot(
+                        product_id=product_id,
+                        quantity=q,
+                        expiry_date=expiry_date,
+                        batch_code=batch_clean,
+                    )
+                )
+            s.commit()
 
     def reduce_stock_fefo(self, product_id: int, quantity: float) -> None:
         """Reduce stock and, if track_expiry, consume lots first (best-effort FEFO)."""

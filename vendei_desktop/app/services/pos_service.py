@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from vendei_desktop.infra.dao.catalog_dao import CatalogDao
 from vendei_desktop.infra.dao.customer_dao import CustomerDao
@@ -79,4 +80,20 @@ class PosService:
             self._stock.reduce_stock_fefo(l.product_id, l.quantity)
 
         return order_id
+
+    def list_inventory_lots(self, product_id: int):
+        return self._stock.list_lots(product_id)
+
+    def add_inventory(
+        self,
+        *,
+        product_id: int,
+        quantity: float,
+        expiry_date: date | None = None,
+        batch_code: str | None = None,
+    ) -> None:
+        self._stock.add_stock(product_id=product_id, quantity=quantity, expiry_date=expiry_date, batch_code=batch_code)
+
+    def get_product(self, product_id: int):
+        return self._catalog.get_product(product_id)
 
