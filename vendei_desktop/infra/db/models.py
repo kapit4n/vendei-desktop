@@ -67,6 +67,7 @@ class Order(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True, index=True)
+    customer: Mapped[Customer | None] = relationship()
     total: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     delivered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -86,4 +87,5 @@ class OrderLine(Base):
     line_total: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     order: Mapped[Order] = relationship(back_populates="lines")
+    product: Mapped[Product] = relationship()
 

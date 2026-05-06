@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
-from datetime import date as _date
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date as _date, datetime, time, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QComboBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -45,9 +48,11 @@ class CustomerDialog(QDialog):
         self.search.setPlaceholderText("Search customer…")
         self.list = QListWidget()
         btns = QHBoxLayout()
+        new_btn = QPushButton("New client")
         ok = QPushButton("Select")
         cancel = QPushButton("Cancel")
         btns.addStretch(1)
+        btns.addWidget(new_btn)
         btns.addWidget(cancel)
         btns.addWidget(ok)
 
@@ -57,6 +62,7 @@ class CustomerDialog(QDialog):
 
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self._select)
+        new_btn.clicked.connect(self._new_customer)
         self.search.textChanged.connect(self._reload)
         self._reload()
 
@@ -74,6 +80,55 @@ class CustomerDialog(QDialog):
             return
         c = it.data(Qt.ItemDataRole.UserRole)
         self._vm.set_customer(c)
+        self.accept()
+
+    def _new_customer(self) -> None:
+        dlg = NewCustomerDialog(self._svc, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        c = dlg.created
+        if not c:
+            return
+        self._vm.set_customer(c)
+        self.accept()
+
+
+class NewCustomerDialog(QDialog):
+    def __init__(self, svc, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New client")
+        self._svc = svc
+        self.created = None
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Full name")
+        self.doc = QLineEdit()
+        self.doc.setPlaceholderText("Document / ID (optional)")
+        form.addRow("Name", self.name)
+        form.addRow("Document", self.doc)
+        layout.addLayout(form)
+
+        btns = QHBoxLayout()
+        save = QPushButton("Create")
+        cancel = QPushButton("Cancel")
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(save)
+        layout.addLayout(btns)
+
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self._create)
+        self.name.returnPressed.connect(self._create)
+
+    def _create(self) -> None:
+        try:
+            c = self._svc.create_customer(name=self.name.text(), document=self.doc.text())
+        except Exception as e:
+            QMessageBox.critical(self, "Create failed", str(e))
+            return
+        self.created = c
         self.accept()
 
 
@@ -142,6 +197,363 @@ class ProductsDialog(QDialog):
             self.table.setItem(row, 5, QTableWidgetItem("Yes" if bool(getattr(p, "visible", True)) else "No"))
 
         self.table.resizeColumnsToContents()
+
+
+class ClientsDialog(QDialog):
+    def __init__(self, vm: PosViewModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Clients")
+        self.resize(760, 560)
+        self._vm = vm
+        self._svc = vm._svc  # pragmatic; can be injected via controller
+
+        layout = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search by name or document…")
+        self.btn_new = QPushButton("New client")
+        top.addWidget(self.search, 1)
+        top.addWidget(self.btn_new)
+        layout.addLayout(top)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Name", "Document", "ID"])
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        layout.addWidget(self.table, 1)
+
+        btns = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        btns.addStretch(1)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+        close_btn.clicked.connect(self.accept)
+        self.search.textChanged.connect(self._reload)
+        self.btn_new.clicked.connect(self._new)
+        self._reload()
+
+    def _reload(self) -> None:
+        q = self.search.text().strip() or None
+        items = self._svc.list_customers(q)
+        self.table.setRowCount(len(items))
+        for row, c in enumerate(items):
+            self.table.setItem(row, 0, QTableWidgetItem(str(getattr(c, "name", ""))))
+            self.table.setItem(row, 1, QTableWidgetItem(str(getattr(c, "document", "") or "—")))
+            self.table.setItem(row, 2, QTableWidgetItem(str(getattr(c, "id", ""))))
+        self.table.resizeColumnsToContents()
+
+    def _new(self) -> None:
+        dlg = NewCustomerDialog(self._svc, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._reload()
+
+
+@dataclass(frozen=True)
+class SalesRow:
+    label: str
+    orders: int
+    total: float
+
+
+class SalesReportDialog(QDialog):
+    def __init__(self, vm: PosViewModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Sales report")
+        self.resize(860, 600)
+        self._svc = vm._svc  # pragmatic; can be injected via controller
+
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+
+        self._tab_daily = self._make_range_tab("Daily")
+        self._tab_weekly = self._make_range_tab("Weekly")
+        self._tab_monthly = self._make_range_tab("Monthly")
+        self._tab_yearly = self._make_range_tab("Yearly")
+        self._tab_custom = self._make_custom_tab()
+        self._tab_today_details = self._make_today_details_tab()
+
+        self.tabs.addTab(self._tab_daily["root"], "Daily")
+        self.tabs.addTab(self._tab_weekly["root"], "Weekly")
+        self.tabs.addTab(self._tab_monthly["root"], "Monthly")
+        self.tabs.addTab(self._tab_yearly["root"], "Yearly")
+        self.tabs.addTab(self._tab_custom["root"], "Custom range")
+        self.tabs.addTab(self._tab_today_details["root"], "Today (detailed)")
+
+        close_row = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        close_row.addStretch(1)
+        close_row.addWidget(close_btn)
+        layout.addLayout(close_row)
+        close_btn.clicked.connect(self.accept)
+
+        self._refresh_active()
+        self.tabs.currentChanged.connect(lambda *_: self._refresh_active())
+
+    def _make_table(self) -> QTableWidget:
+        t = QTableWidget()
+        t.setColumnCount(3)
+        t.setHorizontalHeaderLabels(["Period", "Orders", "Total"])
+        t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        t.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        t.verticalHeader().setVisible(False)
+        return t
+
+    def _make_range_tab(self, title: str):
+        root = QWidget()
+        layout = QVBoxLayout(root)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("From"))
+        start = QDateEdit()
+        start.setCalendarPopup(True)
+        row.addWidget(start)
+        row.addWidget(QLabel("To"))
+        end = QDateEdit()
+        end.setCalendarPopup(True)
+        row.addWidget(end)
+        refresh = QPushButton("Refresh")
+        row.addWidget(refresh)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        summary = QLabel("")
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        table = self._make_table()
+        layout.addWidget(table, 1)
+
+        # defaults: last 30 days
+        today = _date.today()
+        start.setDate(today - timedelta(days=30))
+        end.setDate(today)
+
+        refresh.clicked.connect(lambda *_: self._refresh_tab(title.lower()))
+
+        return {"root": root, "start": start, "end": end, "refresh": refresh, "summary": summary, "table": table}
+
+    def _make_custom_tab(self):
+        root = QWidget()
+        layout = QVBoxLayout(root)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("From"))
+        start = QDateEdit()
+        start.setCalendarPopup(True)
+        row.addWidget(start)
+        row.addWidget(QLabel("To"))
+        end = QDateEdit()
+        end.setCalendarPopup(True)
+        row.addWidget(end)
+        refresh = QPushButton("Refresh")
+        row.addWidget(refresh)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        summary = QLabel("")
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        table = self._make_table()
+        layout.addWidget(table, 1)
+
+        today = _date.today()
+        start.setDate(today - timedelta(days=7))
+        end.setDate(today)
+
+        refresh.clicked.connect(lambda *_: self._refresh_tab("custom"))
+
+        return {"root": root, "start": start, "end": end, "refresh": refresh, "summary": summary, "table": table}
+
+    def _active_key(self) -> str:
+        i = self.tabs.currentIndex()
+        return ["daily", "weekly", "monthly", "yearly", "custom", "today_details"][i] if i >= 0 else "daily"
+
+    def _refresh_active(self) -> None:
+        self._refresh_tab(self._active_key())
+
+    def _range_for(self, key: str):
+        tab = {
+            "daily": self._tab_daily,
+            "weekly": self._tab_weekly,
+            "monthly": self._tab_monthly,
+            "yearly": self._tab_yearly,
+            "custom": self._tab_custom,
+        }[key]
+        start_d = tab["start"].date()
+        end_d = tab["end"].date()
+        start = datetime.combine(_date(start_d.year(), start_d.month(), start_d.day()), time.min)
+        # inclusive end date in UI -> exclusive end datetime
+        end = datetime.combine(_date(end_d.year(), end_d.month(), end_d.day()), time.min) + timedelta(days=1)
+        return tab, start, end
+
+    def _aggregate(self, key: str, orders) -> list[SalesRow]:
+        buckets: dict[str, list[float]] = defaultdict(list)
+        for o in orders:
+            dt = getattr(o, "created_at", None)
+            total = float(getattr(o, "total", 0.0) or 0.0)
+            if not dt:
+                continue
+
+            if key == "daily":
+                label = dt.date().isoformat()
+            elif key == "weekly":
+                y, w, _ = dt.isocalendar()
+                label = f"{y}-W{w:02d}"
+            elif key == "monthly":
+                label = f"{dt.year:04d}-{dt.month:02d}"
+            elif key == "yearly":
+                label = f"{dt.year:04d}"
+            else:  # custom -> daily breakdown
+                label = dt.date().isoformat()
+
+            buckets[label].append(total)
+
+        rows: list[SalesRow] = []
+        for label in sorted(buckets.keys()):
+            totals = buckets[label]
+            rows.append(SalesRow(label=label, orders=len(totals), total=round(sum(totals), 2)))
+        return rows
+
+    def _render(self, tab, *, key: str, rows: list[SalesRow], start: datetime, end: datetime) -> None:
+        total_orders = sum(r.orders for r in rows)
+        total_amount = round(sum(r.total for r in rows), 2)
+        tab["summary"].setText(
+            f"Range: {start.date().isoformat()} → {(end - timedelta(days=1)).date().isoformat()}  ·  "
+            f"Orders: {total_orders}  ·  Total: {total_amount:.2f}"
+        )
+
+        t = tab["table"]
+        t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            t.setItem(i, 0, QTableWidgetItem(r.label))
+            t.setItem(i, 1, QTableWidgetItem(str(r.orders)))
+            t.setItem(i, 2, QTableWidgetItem(f"{r.total:.2f}"))
+        t.resizeColumnsToContents()
+
+    def _refresh_tab(self, key: str) -> None:
+        if key == "today_details":
+            self._refresh_today_details()
+            return
+        tab, start, end = self._range_for(key)
+        orders = list(self._svc.list_orders_between(start=start, end=end))
+        rows = self._aggregate(key, orders)
+        self._render(tab, key=key, rows=rows, start=start, end=end)
+
+    def _make_today_details_tab(self):
+        root = QWidget()
+        layout = QVBoxLayout(root)
+
+        row = QHBoxLayout()
+        self._today_lbl = QLabel("")
+        self._today_lbl.setWordWrap(True)
+        refresh = QPushButton("Refresh")
+        row.addWidget(self._today_lbl, 1)
+        row.addWidget(refresh)
+        layout.addLayout(row)
+
+        self._orders_tbl = QTableWidget()
+        self._orders_tbl.setColumnCount(5)
+        self._orders_tbl.setHorizontalHeaderLabels(["Time", "Order #", "Customer", "Items", "Total"])
+        self._orders_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._orders_tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._orders_tbl.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._orders_tbl.verticalHeader().setVisible(False)
+        layout.addWidget(self._orders_tbl, 1)
+
+        self._lines_tbl = QTableWidget()
+        self._lines_tbl.setColumnCount(5)
+        self._lines_tbl.setHorizontalHeaderLabels(["Product", "Qty", "Unit price", "Line total", "Product ID"])
+        self._lines_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._lines_tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._lines_tbl.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._lines_tbl.verticalHeader().setVisible(False)
+        layout.addWidget(self._lines_tbl, 1)
+
+        refresh.clicked.connect(self._refresh_today_details)
+        self._orders_tbl.itemSelectionChanged.connect(self._refresh_selected_order_lines)
+
+        return {"root": root}
+
+    def _refresh_today_details(self) -> None:
+        today = _date.today()
+        start = datetime.combine(today, time.min)
+        end = start + timedelta(days=1)
+
+        orders = list(self._svc.list_orders_between(start=start, end=end))
+        total_amount = round(sum(float(getattr(o, "total", 0.0) or 0.0) for o in orders), 2)
+        self._today_lbl.setText(f"Date: {today.isoformat()}  ·  Orders: {len(orders)}  ·  Total: {total_amount:.2f}")
+
+        self._orders_tbl.setRowCount(len(orders))
+        for row, o in enumerate(orders):
+            created = getattr(o, "created_at", None)
+            created_txt = created.strftime("%H:%M:%S") if created else "—"
+            oid = int(getattr(o, "id", 0) or 0)
+            cust = getattr(o, "customer", None)
+            cust_name = str(getattr(cust, "name", "") or "Anonymous") if cust else "Anonymous"
+            lines = list(getattr(o, "lines", []) or [])
+            items = sum(float(getattr(ln, "quantity", 0.0) or 0.0) for ln in lines) if lines else 0.0
+            total = float(getattr(o, "total", 0.0) or 0.0)
+
+            it0 = QTableWidgetItem(created_txt)
+            it1 = QTableWidgetItem(str(oid))
+            it1.setData(Qt.ItemDataRole.UserRole, oid)
+            self._orders_tbl.setItem(row, 0, it0)
+            self._orders_tbl.setItem(row, 1, it1)
+            self._orders_tbl.setItem(row, 2, QTableWidgetItem(cust_name))
+            self._orders_tbl.setItem(row, 3, QTableWidgetItem(f"{items:g}"))
+            self._orders_tbl.setItem(row, 4, QTableWidgetItem(f"{total:.2f}"))
+
+        self._orders_tbl.resizeColumnsToContents()
+
+        # reset lines table until an order is selected
+        self._lines_tbl.setRowCount(0)
+        if orders:
+            self._orders_tbl.selectRow(0)
+            self._refresh_selected_order_lines()
+
+    def _selected_order_id(self) -> int | None:
+        items = self._orders_tbl.selectedItems()
+        if not items:
+            return None
+        # Order # column stores the id in UserRole
+        it = self._orders_tbl.item(items[0].row(), 1)
+        if not it:
+            return None
+        oid = it.data(Qt.ItemDataRole.UserRole)
+        return int(oid) if oid is not None else None
+
+    def _refresh_selected_order_lines(self) -> None:
+        oid = self._selected_order_id()
+        if not oid:
+            self._lines_tbl.setRowCount(0)
+            return
+        o = self._svc.get_order_with_lines(oid)
+        lines = list(getattr(o, "lines", []) or []) if o else []
+
+        self._lines_tbl.setRowCount(len(lines))
+        for row, ln in enumerate(lines):
+            prod = getattr(ln, "product", None)
+            prod_name = str(getattr(prod, "name", "") or f"Product #{getattr(ln, 'product_id', '—')}")
+            qty = float(getattr(ln, "quantity", 0.0) or 0.0)
+            unit = float(getattr(ln, "unit_price", 0.0) or 0.0)
+            total = float(getattr(ln, "line_total", 0.0) or 0.0)
+            pid = int(getattr(ln, "product_id", 0) or 0)
+
+            self._lines_tbl.setItem(row, 0, QTableWidgetItem(prod_name))
+            self._lines_tbl.setItem(row, 1, QTableWidgetItem(f"{qty:g}"))
+            self._lines_tbl.setItem(row, 2, QTableWidgetItem(f"{unit:.2f}"))
+            self._lines_tbl.setItem(row, 3, QTableWidgetItem(f"{total:.2f}"))
+            self._lines_tbl.setItem(row, 4, QTableWidgetItem(str(pid)))
+
+        self._lines_tbl.resizeColumnsToContents()
 
 
 class InventoryDialog(QDialog):
@@ -399,10 +811,16 @@ class PosWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         act_products = QAction("Products", self)
         act_products.triggered.connect(self._open_products)
+        act_clients = QAction("Clients", self)
+        act_clients.triggered.connect(self._open_clients)
         act_inventory = QAction("Inventory", self)
         act_inventory.triggered.connect(self._open_inventory)
+        act_sales = QAction("Sales report", self)
+        act_sales.triggered.connect(self._open_sales)
         self.menuBar().addAction(act_products)
+        self.menuBar().addAction(act_clients)
         self.menuBar().addAction(act_inventory)
+        self.menuBar().addAction(act_sales)
         self.menuBar().addAction(act_quit)
 
         # Signals
@@ -420,8 +838,16 @@ class PosWindow(QMainWindow):
         dlg = ProductsDialog(self.vm, self)
         dlg.exec()
 
+    def _open_clients(self) -> None:
+        dlg = ClientsDialog(self.vm, self)
+        dlg.exec()
+
     def _open_inventory(self) -> None:
         dlg = InventoryDialog(self.vm, self)
+        dlg.exec()
+
+    def _open_sales(self) -> None:
+        dlg = SalesReportDialog(self.vm, self)
         dlg.exec()
 
     def _product_icon(self, image_url: str | None) -> QIcon | None:

@@ -31,3 +31,15 @@ class CustomerDao:
             s.refresh(c)
             return c
 
+    def create_customer(self, *, name: str, document: str | None) -> Customer:
+        nm = (name or "").strip()
+        if not nm:
+            raise ValueError("Customer name is required")
+        doc = (document or "").strip() or None
+        with self.session_factory() as s:
+            c = Customer(name=nm, document=doc)
+            s.add(c)
+            s.commit()
+            s.refresh(c)
+            return c
+

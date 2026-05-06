@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from vendei_desktop.infra.dao.catalog_dao import CatalogDao
 from vendei_desktop.infra.dao.customer_dao import CustomerDao
@@ -51,6 +51,9 @@ class PosService:
     def list_customers(self, query: str | None = None):
         return self._customers.list_customers(query=query)
 
+    def create_customer(self, *, name: str, document: str | None = None):
+        return self._customers.create_customer(name=name, document=document)
+
     def submit_order(
         self,
         *,
@@ -96,4 +99,10 @@ class PosService:
 
     def get_product(self, product_id: int):
         return self._catalog.get_product(product_id)
+
+    def list_orders_between(self, *, start: datetime, end: datetime):
+        return self._orders.list_orders_between(start=start, end=end)
+
+    def get_order_with_lines(self, order_id: int):
+        return self._orders.get_order_with_lines(order_id)
 
