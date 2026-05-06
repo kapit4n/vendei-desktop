@@ -9,6 +9,7 @@ from vendei_desktop.infra.db.engine import DbConfig, create_session_factory, cre
 from vendei_desktop.infra.dao.catalog_dao import CatalogDao
 from vendei_desktop.infra.dao.customer_dao import CustomerDao
 from vendei_desktop.infra.dao.order_dao import OrderDao
+from vendei_desktop.infra.dao.purchase_request_dao import PurchaseRequestDao
 from vendei_desktop.infra.dao.stock_dao import StockDao
 
 from .services.pos_service import PosService
@@ -21,6 +22,7 @@ class AppContainer:
     customer_dao: CustomerDao
     stock_dao: StockDao
     order_dao: OrderDao
+    purchase_request_dao: PurchaseRequestDao
     pos_service: PosService
 
 
@@ -38,7 +40,8 @@ def build_container() -> AppContainer:
     customer_dao = CustomerDao(session_factory)
     stock_dao = StockDao(session_factory)
     order_dao = OrderDao(session_factory)
-    pos_service = PosService(catalog_dao, customer_dao, stock_dao, order_dao)
+    purchase_request_dao = PurchaseRequestDao(session_factory)
+    pos_service = PosService(catalog_dao, customer_dao, stock_dao, order_dao, purchase_request_dao)
 
     return AppContainer(
         session_factory=session_factory,
@@ -46,6 +49,7 @@ def build_container() -> AppContainer:
         customer_dao=customer_dao,
         stock_dao=stock_dao,
         order_dao=order_dao,
+        purchase_request_dao=purchase_request_dao,
         pos_service=pos_service,
     )
 

@@ -89,3 +89,28 @@ class OrderLine(Base):
     order: Mapped[Order] = relationship(back_populates="lines")
     product: Mapped[Product] = relationship()
 
+
+class PurchaseRequest(Base):
+    __tablename__ = "purchase_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")  # open/closed
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    items: Mapped[list["PurchaseRequestItem"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan"
+    )
+
+
+class PurchaseRequestItem(Base):
+    __tablename__ = "purchase_request_items"
+    __table_args__ = (UniqueConstraint("request_id", "product_id", name="uq_request_product"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("purchase_requests.id"), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+
+    request: Mapped[PurchaseRequest] = relationship(back_populates="items")
+    product: Mapped[Product] = relationship()

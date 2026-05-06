@@ -7,10 +7,11 @@ from datetime import date as _date, datetime, time, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -556,6 +557,187 @@ class SalesReportDialog(QDialog):
         self._lines_tbl.resizeColumnsToContents()
 
 
+class ReorderDialog(QDialog):
+    def __init__(self, vm: PosViewModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Reorder / Purchase request")
+        self.resize(980, 650)
+        self._svc = vm._svc  # pragmatic; can be injected via controller
+
+        layout = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search products…")
+        self.btn_refresh = QPushButton("Refresh")
+        top.addWidget(self.search, 1)
+        top.addWidget(self.btn_refresh)
+        layout.addLayout(top)
+
+        self.lbl = QLabel("")
+        self.lbl.setWordWrap(True)
+        layout.addWidget(self.lbl)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["Image", "Name", "Code", "Stock", "Out", "Request", "Qty"])
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setIconSize(QSize(32, 32))
+        layout.addWidget(self.table, 1)
+
+        close_row = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        close_row.addStretch(1)
+        close_row.addWidget(close_btn)
+        layout.addLayout(close_row)
+        close_btn.clicked.connect(self.accept)
+
+        self.btn_refresh.clicked.connect(self._reload)
+        self.search.textChanged.connect(self._reload)
+        self._reload()
+
+    def _product_icon(self, image_url: str | None) -> QIcon | None:
+        if not image_url:
+            return None
+        asset_path = Path(__file__).resolve().parent / "assets" / image_url
+        if not asset_path.exists():
+            return None
+        px = QPixmap(str(asset_path))
+        if px.isNull():
+            return None
+        px = px.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        return QIcon(px)
+
+    def _reload(self) -> None:
+        q = self.search.text().strip() or None
+        products = self._svc.list_products(query=q, category_id=None, only_visible=False)
+
+        pr = self._svc.get_open_purchase_request()
+        requested = {int(it.product_id): float(it.quantity) for it in getattr(pr, "items", []) or []}
+
+        self.table.setRowCount(len(products))
+        out_brush = QBrush(QColor(180, 0, 0))
+
+        for row, p in enumerate(products):
+            pid = int(getattr(p, "id", 0) or 0)
+            stock = float(getattr(p, "stock", 0.0) or 0.0)
+            out = stock <= 0
+
+            icon = self._product_icon(getattr(p, "image_url", None))
+            img_item = QTableWidgetItem()
+            if icon:
+                img_item.setIcon(icon)
+            self.table.setItem(row, 0, img_item)
+
+            name_item = QTableWidgetItem(str(getattr(p, "name", "")))
+            code_item = QTableWidgetItem(str(getattr(p, "code", "") or "—"))
+            stock_item = QTableWidgetItem(f"{stock:g}")
+            out_item = QTableWidgetItem("YES" if out else "")
+
+            if out:
+                for it in (name_item, code_item, stock_item, out_item):
+                    it.setForeground(out_brush)
+
+            self.table.setItem(row, 1, name_item)
+            self.table.setItem(row, 2, code_item)
+            self.table.setItem(row, 3, stock_item)
+            self.table.setItem(row, 4, out_item)
+
+            cb = QCheckBox()
+            cb.setChecked(pid in requested)
+            self.table.setCellWidget(row, 5, cb)
+
+            qty = QDoubleSpinBox()
+            qty.setDecimals(3)
+            qty.setRange(0.001, 1_000_000)
+            qty.setValue(max(0.001, requested.get(pid, 1.0)))
+            qty.setEnabled(cb.isChecked())
+            self.table.setCellWidget(row, 6, qty)
+
+            def on_toggle(checked: bool, product_id: int = pid, spin: QDoubleSpinBox = qty) -> None:
+                spin.setEnabled(checked)
+                try:
+                    if checked:
+                        self._svc.set_purchase_request_item(product_id=product_id, quantity=float(spin.value()))
+                    else:
+                        self._svc.remove_purchase_request_item(product_id=product_id)
+                except Exception as e:
+                    QMessageBox.critical(self, "Request update failed", str(e))
+
+            def on_qty_change(_v: float, product_id: int = pid, spin: QDoubleSpinBox = qty, box: QCheckBox = cb) -> None:
+                if not box.isChecked():
+                    return
+                try:
+                    self._svc.set_purchase_request_item(product_id=product_id, quantity=float(spin.value()))
+                except Exception as e:
+                    QMessageBox.critical(self, "Request update failed", str(e))
+
+            cb.toggled.connect(on_toggle)
+            qty.valueChanged.connect(on_qty_change)
+
+        requested_count = len(requested)
+        self.lbl.setText(f"Open request #{getattr(pr, 'id', '—')}  ·  Items requested: {requested_count}")
+        self.table.resizeColumnsToContents()
+
+
+class ProductCard(QFrame):
+    def __init__(self, *, title: str, subtitle: str, badge: str, icon: QIcon | None, on_add) -> None:
+        super().__init__()
+        self.setObjectName("ProductCard")
+        root = QHBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
+
+        img = QLabel()
+        img.setFixedSize(64, 64)
+        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if icon:
+            img.setPixmap(icon.pixmap(64, 64))
+        else:
+            img.setText("No\nimg")
+        root.addWidget(img)
+
+        mid = QVBoxLayout()
+        mid.setSpacing(4)
+        name = QLabel(title)
+        name.setObjectName("ProductCardTitle")
+        name.setWordWrap(True)
+        meta = QLabel(subtitle)
+        meta.setObjectName("ProductCardSubtitle")
+        meta.setWordWrap(True)
+        mid.addWidget(name)
+        mid.addWidget(meta)
+        root.addLayout(mid, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(6)
+        stock = QLabel(badge)
+        stock.setObjectName("ProductCardBadge")
+        stock.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        stock.setWordWrap(True)
+        stock.setMinimumWidth(120)
+        qty = QDoubleSpinBox()
+        qty.setDecimals(0)
+        qty.setRange(1, 1_000_000)
+        qty.setValue(1)
+        qty.setObjectName("ProductCardQty")
+
+        btn = QPushButton("Add")
+        btn.setObjectName("ProductCardAdd")
+
+        def add_clicked() -> None:
+            on_add(float(qty.value()))
+
+        btn.clicked.connect(add_clicked)
+        right.addWidget(stock)
+        right.addWidget(qty)
+        right.addWidget(btn)
+        right.addStretch(1)
+        root.addLayout(right)
+
+
 class InventoryDialog(QDialog):
     def __init__(self, vm: PosViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -802,6 +984,7 @@ class PosWindow(QMainWindow):
         self.products.setWrapping(True)
         self.products.setWordWrap(True)
         self.products.setSpacing(12)
+        self.products.setUniformItemSizes(False)
         r.addWidget(self.products, 1)
 
         self.setCentralWidget(splitter)
@@ -817,10 +1000,13 @@ class PosWindow(QMainWindow):
         act_inventory.triggered.connect(self._open_inventory)
         act_sales = QAction("Sales report", self)
         act_sales.triggered.connect(self._open_sales)
+        act_reorder = QAction("Reorder", self)
+        act_reorder.triggered.connect(self._open_reorder)
         self.menuBar().addAction(act_products)
         self.menuBar().addAction(act_clients)
         self.menuBar().addAction(act_inventory)
         self.menuBar().addAction(act_sales)
+        self.menuBar().addAction(act_reorder)
         self.menuBar().addAction(act_quit)
 
         # Signals
@@ -850,6 +1036,10 @@ class PosWindow(QMainWindow):
         dlg = SalesReportDialog(self.vm, self)
         dlg.exec()
 
+    def _open_reorder(self) -> None:
+        dlg = ReorderDialog(self.vm, self)
+        dlg.exec()
+
     def _product_icon(self, image_url: str | None) -> QIcon | None:
         if not image_url:
             return None
@@ -867,30 +1057,122 @@ class PosWindow(QMainWindow):
         items = self.vm._svc.list_products(query=q, category_id=None, only_visible=True)
         self.products.clear()
         for p in items:
-            it = QListWidgetItem(f"Bs {p.price:.2f}  ·  {p.name}")
             icon = self._product_icon(getattr(p, "image_url", None))
-            if icon:
-                it.setIcon(icon)
+            stock = float(getattr(p, "stock", 0.0) or 0.0)
+            out = stock <= 0
+            badge = "OUT OF STOCK" if out else f"Stock: {stock:g}"
+            subtitle = f"Bs {float(getattr(p, 'price', 0.0) or 0.0):.2f}"
+
+            it = QListWidgetItem()
             it.setData(Qt.ItemDataRole.UserRole, p)
+            it.setSizeHint(QSize(340, 110))
             self.products.addItem(it)
+
+            def on_add(_checked: bool = False, product=p) -> None:
+                self.vm.add_product(product)
+                self._render_ticket()
+
+            def on_add_qty(qty: float, product=p) -> None:
+                self.vm.add_product(product, quantity=qty)
+                self._render_ticket()
+
+            card = ProductCard(
+                title=str(getattr(p, "name", "")),
+                subtitle=subtitle,
+                badge=badge,
+                icon=icon,
+                on_add=on_add_qty,
+            )
+            if out:
+                card.setProperty("outOfStock", True)
+            self.products.setItemWidget(it, card)
+
+        # Keep the app readable under light system themes:
+        # only style the product cards, don't force a dark palette globally.
+        self.products.setStyleSheet(
+            """
+            QListWidget { background: transparent; border: none; }
+            QFrame#ProductCard {
+              background: #ffffff;
+              border: 1px solid #e5e7eb;
+              border-radius: 14px;
+            }
+            QFrame#ProductCard[outOfStock="true"] { border: 1px solid #fca5a5; }
+            QLabel#ProductCardTitle { font-weight: 650; font-size: 14px; color: #111827; }
+            QLabel#ProductCardSubtitle { color: #374151; }
+            QLabel#ProductCardBadge {
+              background: #f3f4f6;
+              border: 1px solid #e5e7eb;
+              color: #111827;
+              border-radius: 10px;
+              padding: 6px 8px;
+              font-weight: 650;
+              min-height: 34px;
+            }
+            QPushButton#ProductCardAdd { font-weight: 700; }
+            """
+        )
 
     def _render_ticket(self) -> None:
         self.ticket.clear()
         for ln in self.vm.state.lines:
-            it = QListWidgetItem(
-                f"{ln.quantity:g} × Bs {ln.unit_price:.2f}  ·  {ln.name}  =  Bs {ln.line_total:.2f}"
-            )
+            it = QListWidgetItem()
             icon = self._product_icon(getattr(ln, "image_url", None))
             if icon:
                 it.setIcon(icon)
+            it.setSizeHint(QSize(520, 46))
             self.ticket.addItem(it)
+
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(8, 6, 8, 6)
+            lay.setSpacing(8)
+
+            name = QLabel(ln.name)
+            name.setWordWrap(True)
+            lay.addWidget(name, 1)
+
+            unit = QLabel(f"Bs {ln.unit_price:.2f}")
+            unit.setMinimumWidth(90)
+            unit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lay.addWidget(unit)
+
+            qty = QDoubleSpinBox()
+            qty.setDecimals(0)
+            qty.setRange(1, 1_000_000)
+            qty.setValue(float(ln.quantity))
+            qty.setMinimumWidth(80)
+            lay.addWidget(qty)
+
+            line_total = QLabel(f"Bs {ln.line_total:.2f}")
+            line_total.setMinimumWidth(110)
+            line_total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            lay.addWidget(line_total)
+
+            rm = QPushButton("Remove")
+            lay.addWidget(rm)
+
+            def on_qty_change(_v: float, product_id: int = ln.product_id, unit_price: float = ln.unit_price) -> None:
+                qv = float(qty.value())
+                self.vm.set_line_quantity(product_id=product_id, quantity=qv)
+                line_total.setText(f"Bs {qv * float(unit_price):.2f}")
+                self.total.setText(f"Total: Bs {self.vm.state.total:.2f}")
+
+            def on_remove(_checked: bool = False, product_id: int = ln.product_id) -> None:
+                self.vm.set_line_quantity(product_id=product_id, quantity=0)
+                self._render_ticket()
+
+            qty.valueChanged.connect(on_qty_change)
+            rm.clicked.connect(on_remove)
+
+            self.ticket.setItemWidget(it, row)
         self.total.setText(f"Total: Bs {self.vm.state.total:.2f}")
         doc = self.vm.state.customer_doc or "—"
         self.cust_lbl.setText(f"Client: {self.vm.state.customer_name}  ·  ID: {doc}")
 
     def _add_clicked(self, item: QListWidgetItem) -> None:
         p = item.data(Qt.ItemDataRole.UserRole)
-        self.vm.add_product(p)
+        self.vm.add_product(p, quantity=1)
         self._render_ticket()
 
     def _quick_add(self) -> None:
@@ -901,7 +1183,7 @@ class PosWindow(QMainWindow):
         if not p:
             QMessageBox.information(self, "Not found", f"No product with code: {code}")
             return
-        self.vm.add_product(p)
+        self.vm.add_product(p, quantity=1)
         self.code.setText("")
         self._render_ticket()
 
@@ -926,6 +1208,8 @@ class PosWindow(QMainWindow):
         QMessageBox.information(self, "Order saved", f"Order #{oid} saved.\nTotal: Bs {self.vm.state.total:.2f}")
         self.vm.clear_ticket()
         self._render_ticket()
+        # Reload catalog to reflect reduced stock after submit.
+        self._reload_products()
 
 
 def run_app() -> None:

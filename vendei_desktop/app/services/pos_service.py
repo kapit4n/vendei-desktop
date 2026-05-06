@@ -6,6 +6,7 @@ from datetime import date, datetime
 from vendei_desktop.infra.dao.catalog_dao import CatalogDao
 from vendei_desktop.infra.dao.customer_dao import CustomerDao
 from vendei_desktop.infra.dao.order_dao import OrderDao
+from vendei_desktop.infra.dao.purchase_request_dao import PurchaseRequestDao
 from vendei_desktop.infra.dao.stock_dao import StockDao
 
 
@@ -30,11 +31,13 @@ class PosService:
         customers: CustomerDao,
         stock: StockDao,
         orders: OrderDao,
+        purchase_requests: PurchaseRequestDao,
     ) -> None:
         self._catalog = catalog
         self._customers = customers
         self._stock = stock
         self._orders = orders
+        self._purchase_requests = purchase_requests
 
     def list_categories(self):
         return self._catalog.list_categories()
@@ -105,4 +108,15 @@ class PosService:
 
     def get_order_with_lines(self, order_id: int):
         return self._orders.get_order_with_lines(order_id)
+
+    def get_open_purchase_request(self):
+        return self._purchase_requests.get_open_with_items()
+
+    def set_purchase_request_item(self, *, product_id: int, quantity: float) -> None:
+        pr = self._purchase_requests.get_open()
+        self._purchase_requests.set_item(request_id=pr.id, product_id=product_id, quantity=quantity)
+
+    def remove_purchase_request_item(self, *, product_id: int) -> None:
+        pr = self._purchase_requests.get_open()
+        self._purchase_requests.remove_item(request_id=pr.id, product_id=product_id)
 

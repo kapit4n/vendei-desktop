@@ -26,8 +26,11 @@ class PosViewModel:
     def clear_ticket(self) -> None:
         self.state.lines = []
 
-    def add_product(self, p) -> None:
+    def add_product(self, p, quantity: float = 1) -> None:
         # p is ORM Product
+        q = float(quantity)
+        if q <= 0:
+            return
         for i, ln in enumerate(self.state.lines):
             if ln.product_id == p.id:
                 self.state.lines[i] = TicketLine(
@@ -36,7 +39,7 @@ class PosViewModel:
                     unit_label=ln.unit_label,
                     image_url=ln.image_url,
                     unit_price=ln.unit_price,
-                    quantity=ln.quantity + 1,
+                    quantity=ln.quantity + q,
                 )
                 return
         self.state.lines.append(
@@ -46,9 +49,26 @@ class PosViewModel:
                 unit_label=None,
                 image_url=getattr(p, "image_url", None),
                 unit_price=float(p.price),
-                quantity=1,
+                quantity=q,
             )
         )
+
+    def set_line_quantity(self, *, product_id: int, quantity: float) -> None:
+        q = float(quantity)
+        if q <= 0:
+            self.state.lines = [ln for ln in self.state.lines if ln.product_id != int(product_id)]
+            return
+        for i, ln in enumerate(self.state.lines):
+            if ln.product_id == int(product_id):
+                self.state.lines[i] = TicketLine(
+                    product_id=ln.product_id,
+                    name=ln.name,
+                    unit_label=ln.unit_label,
+                    image_url=ln.image_url,
+                    unit_price=ln.unit_price,
+                    quantity=q,
+                )
+                return
 
     def set_customer(self, c) -> None:
         self.state.customer_id = c.id
