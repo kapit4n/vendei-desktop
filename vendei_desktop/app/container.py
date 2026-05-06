@@ -6,11 +6,13 @@ from sqlalchemy.orm import sessionmaker
 
 from vendei_desktop.infra.db.bootstrap import create_schema, seed_if_empty
 from vendei_desktop.infra.db.engine import DbConfig, create_session_factory, create_sqlite_engine
+from vendei_desktop.infra.dao.brand_dao import BrandDao
 from vendei_desktop.infra.dao.catalog_dao import CatalogDao
 from vendei_desktop.infra.dao.customer_dao import CustomerDao
 from vendei_desktop.infra.dao.order_dao import OrderDao
 from vendei_desktop.infra.dao.purchase_request_dao import PurchaseRequestDao
 from vendei_desktop.infra.dao.stock_dao import StockDao
+from vendei_desktop.infra.dao.unit_dao import UnitDao
 
 from .services.pos_service import PosService
 
@@ -41,7 +43,17 @@ def build_container() -> AppContainer:
     stock_dao = StockDao(session_factory)
     order_dao = OrderDao(session_factory)
     purchase_request_dao = PurchaseRequestDao(session_factory)
-    pos_service = PosService(catalog_dao, customer_dao, stock_dao, order_dao, purchase_request_dao)
+    unit_dao = UnitDao(session_factory)
+    brand_dao = BrandDao(session_factory)
+    pos_service = PosService(
+        catalog_dao,
+        customer_dao,
+        stock_dao,
+        order_dao,
+        purchase_request_dao,
+        unit_dao,
+        brand_dao,
+    )
 
     return AppContainer(
         session_factory=session_factory,
